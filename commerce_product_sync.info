@@ -1,0 +1,11 @@
+name = Sync Products on Product Display
+description = Automatically creates, updates and deleted products based on their attributes.
+core = 7.x
+package = Commerce
+version = 7.x-1.0
+project = commerce_product_sync
+dependencies[] = commerce_product
+dependencies[] = ctools
+dependencies[] = entity
+dependencies[] = entityreference
+files[] = commerce_product_sync.helpers.inc

@@ -1,0 +1,336 @@
+<?php
+
+/**
+ * @file
+ * Code for the Marketplace Product Creation.
+ *
+ * @todo:
+ * - Variation title empty, misschien product_autotitle
+ * - Status enabled/disabled
+ * -  hoe om te gaan met hardcoded dingen (zoals store nu)
+ * - wat als er geen attributen zijn?
+ * - wat te doen na bulk-creation?
+ *    - bijvoorbeeld de 'attribute' field locken?
+ * - kan de logica mbt forms aan een veld ipv het hele form worden gehangen?
+ *    --> helaas niet
+ *
+ *
+ * This modules replaces both 'commerce bulk creation' and 'inline entity
+ * form' with 'bulk creation' patch.
+ *
+ * What should happen:
+ * - On 'product-display' CREATE form replace the 'inline entity form'. A select
+ * box with a product-type selector is good enough.
+ * - On 'product-display' EDIT form the product-field might be hidden and
+ * replaced with a tab 'views-editable' fields to edit 'stock' and 'price' per
+ * product. -> nope: just use multiple-inline-entity-form
+ */
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ *
+ * Adds product-sync settings-form to field_instance_form for any field of
+ * type 'commerce_product_reference'.
+ *
+ * FORM_ID = "field_ui_field_edit_form".
+ */
+function commerce_product_sync_form_field_ui_field_edit_form_alter(&$form, &$form_state, $form_id) {
+
+  // Only show on field_instances of field_type = 'commerce_product_reference'.
+  if ('commerce_product_reference' != $form['#field']['type']) {
+    return;
+  }
+
+  // Add settings product-sync settings form to field-instance form.
+  $form['instance']['product_sync'] = array(
+    '#type' => 'fieldset',
+    '#title' => 'Product sync settings',
+    '#description' => '',
+    '#default_value' => $form['#instance']['product_sync'],
+  );
+  $form['instance']['product_sync']['bulk_create'] = array(
+    '#type' => 'checkbox',
+    '#title' => 'Bulk create products when creating a new product',
+    '#default_value' => $form['#instance']['product_sync']['bulk_create'],
+    '#description' => 'If you use Inline Entity Form, it is recommended to disable "Allow users to add new products" and "Allow user to add existing products".
+    When enabled, the product_reference widget is replaced on creation.',
+  );
+  $form['instance']['product_sync']['keep_in_sync'] = array(
+    '#type' => 'checkbox',
+    '#title' => 'Add or remove products when attributes are changed',
+    '#disabled' => TRUE,
+    '#default_value' => $form['#instance']['product_sync']['keep_in_sync'],
+    '#description' => 'This feature has not been implemented yet. It is here for reference.',
+  );
+}
+
+
+/**
+ * Implements hook_form_alter().
+ */
+function commerce_product_sync_form_alter(&$form, &$form_state, $form_id) {
+
+  // Validate: only on entity create forms.
+  if (!isset($form['#entity']) || !isset($form['#bundle'])) {
+    return;
+  }
+
+  // Validate: create new products only on new product display nodes.
+  if (isset($form['#entity']->nid)) {
+    return;
+  }
+
+  // Validate: form must have product reference fields.
+  $commerce_product_reference_fields = field_read_fields(array('type' => 'commerce_product_reference'));
+  $bundle_commerce_product_reference_fields = array_intersect(array_keys($commerce_product_reference_fields), array_keys($form));
+  if (empty($bundle_commerce_product_reference_fields)) {
+    return;
+  }
+  // But just 1.
+  elseif (1 !== count($bundle_commerce_product_reference_fields)) {
+    watchdog('commerce_product_sync', "More than 1 commerce_product_reference fields: Cannot bulk create products for bundle %bundle.", array('%bundle' => $form['#bundle']), WATCHDOG_ERROR);
+    return;
+  }
+
+  // Validate: bulk creation must be enabled.
+  $commerce_product_reference_field_instance = field_info_instance($form['#entity_type'], reset($bundle_commerce_product_reference_fields), $form['#bundle']);
+  if (!$commerce_product_reference_field_instance['product_sync']['bulk_create']) {
+    return;
+  }
+
+
+  // Check are finished, time for action.
+
+  // Load helper functions.
+  ctools_include('helpers', 'commerce_product_sync');
+
+  // Build: First remove the original field.
+  unset($form[$commerce_product_reference_field_instance['field_name']]);
+
+  // Get referenceable product type.
+  $referenceable_product_types = _commerce_product_sync_filter_referenceable_types($commerce_product_reference_field_instance['settings']['referenceable_types']);
+
+  // Get selected product_type
+  if (isset($form_state['values']['product_type'])) {
+    $current_product_type = $form_state['values']['product_type'];
+  }
+  else {
+    $current_product_type = reset($referenceable_product_types);
+  }
+
+
+  // Add a select for the product-type to create.
+  $form['commerce_product_sync'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Configure bulk creation'),
+  );
+  $form['commerce_product_sync']['commerce_product_reference'] = array(
+    '#type' => 'hidden',
+    '#value' => $commerce_product_reference_field_instance['field_name'],
+  );
+  $form['commerce_product_sync']['product_type'] = array(
+    '#type' => 'radios',
+    '#title' => t('Product Type'),
+    '#options' => $referenceable_product_types,
+    '#default_value' => $current_product_type,
+    '#required' => TRUE,
+    '#description' => t('Choose the product-type.'),
+    '#ajax' => array(
+      'callback' => '_commerce_product_sync_product_fields_ajax_callback',
+      'wrapper' => 'static-product-fields',
+      'method' => 'replace',
+    ),
+  );
+  $form['commerce_product_sync']['product_fields'] = array(
+    '#title' => t("Static product fields"),
+    // The prefix/suffix provide the div that we're replacing, named by
+    // #ajax['wrapper'] above.
+    '#prefix' => '<div id="static-product-fields">',
+    '#suffix' => '</div>',
+    '#type' => 'fieldset',
+    '#description' => t('This is where we get automatically generated checkboxes'),
+  );
+
+  // Add static fields.
+  $form['#parents'] = array();
+  $form_static_fields = _commerce_product_sync_get_static_fields_form($form, $form_state, $current_product_type);
+  foreach ($form_static_fields as $field_form) {
+    $form['commerce_product_sync']['product_fields'] += $field_form;
+  }
+
+  // Add a submit handlers to create products.
+  $form['actions']['submit']['#submit'][] = '_commerce_product_sync_form_submit';
+
+  // @todo: maybe rebuild and redirect can go away.
+  $form_state['#rebuild'] = TRUE;
+  $form['#redirect'] = FALSE;
+
+
+}
+
+/**
+ * Extra submit callback that creates products.
+ */
+function _commerce_product_sync_form_submit($form, &$form_state) {
+
+  // Load helper functions.
+  ctools_include('helpers', 'commerce_product_sync');
+  ctools_include('cartesian', 'commerce_product_sync');
+
+  // Get values from submitted form.
+  $values = $form_state['values'];
+  $product_field = $values['commerce_product_reference'];
+
+
+  // Get store info.
+  $store_id = $values['commerce_store']['und'][0]['target_id'];
+  $store_entity = entity_metadata_wrapper('commerce_store', $store_id);
+
+  // Get variants info for product type.
+  $commerce_product_bundle = $values['product_type'];
+  $attribute_fields = _commerce_product_sync_get_attribute_fields($commerce_product_bundle);
+  $possible_attribute_field_values = _commerce_product_sync_get_attribute_fields_possible_values($attribute_fields, $commerce_product_bundle);
+
+  // Remove attribute fields we don't have values for.
+  $attribute_field_values = array();
+  foreach ($attribute_fields as $k => $v) {
+    if (isset($possible_attribute_field_values[$k])) {
+      $attribute_field_values[$k] = $possible_attribute_field_values[$k];
+    }
+  }
+
+  // Get submitted static values (price, stock-level).
+  $static_fields = _commerce_product_sync_get_static_fields($commerce_product_bundle);
+  foreach ($static_fields as $key => $static_field) {
+    if (in_array($static_field, $values)) {
+      $static_fields[$key] = reset($values[$key][LANGUAGE_NONE]);
+    }
+  }
+
+  // Get an array with attributes.
+  $variants = cartesian($attribute_field_values);
+
+  // Create the product display.
+  $product_display_wrapper = entity_metadata_wrapper('node', $form_state['node']);
+
+  // Set meta/property info on product display.
+  $product_display_wrapper->author = $store_entity->creator->getIdentifier();
+
+  // Create and add products to product_display.
+  foreach ($variants as $new_product_attributes) {
+    // Create products.
+    try {
+      // Get wrapper.
+      $product_wrapper = entity_metadata_wrapper('commerce_product', commerce_product_new($commerce_product_bundle));
+
+      // Set meta/property info on product.
+      $product_wrapper->creator = $store_entity->creator->getIdentifier();
+
+      // Set static fields.
+      foreach ($static_fields as $k => $v) {
+        if (count($v) > 1) {
+          $product_wrapper->{$k}->set($v);
+        }
+        else {
+          $product_wrapper->{$k} = reset($v);
+        }
+      }
+
+      // Set attribute fields.
+      foreach ($new_product_attributes as $k => $v) {
+        $product_wrapper->$k = $v;
+      }
+
+      // Set active/published status.
+      $product_wrapper->status = FALSE;
+
+      // Set title.
+      // $product_wrapper->title = "No variation in the title...";
+      // Set store-owner as author of the display.
+      $store_id = $values['commerce_store']['und'][0]['target_id'];
+
+      // Save the product.
+      $product_wrapper->save();
+    }
+    catch (Exception $e) {
+      drupal_set_message($e->getMessage(), 'error');
+      // watchdog('commerce_product_sync', $e->getMessage(), WATCHDOG_ERROR);
+    }
+
+
+    // Add variant to display.
+    $new_product_id = $product_wrapper->getIdentifier();
+
+    $product_ids = $product_display_wrapper->{$product_field}->raw();
+    $product_ids[] = $new_product_id;
+    $product_display_wrapper->{$product_field}->set($product_ids);
+
+    // Save product display.
+    $product_display_wrapper->save();
+  }
+
+}
+
+/**
+ * Return product_fields when changing product-bundle.
+ *
+ * Callback element needs only select the portion of the form to be updated.
+ * Since #ajax['callback'] return can be HTML or a renderable array (or an
+ * array of commands), we can just return a piece of the form.
+ */
+function _commerce_product_sync_product_fields_ajax_callback($form, $form_state) {
+  // Load the product creation form for the selected type.
+  $commerce_product_bundle = $form_state['values']['product_type'];
+
+  // Add static fields form.
+  $form['#parents'] = array();
+  $form_static_fields = _commerce_product_sync_get_static_fields_form($form, $form_state, $commerce_product_bundle);
+  foreach ($form_static_fields as $field_form) {
+    $form['commerce_product_sync']['product_fields'] += $field_form;
+  }
+
+  return $form['commerce_product_sync']['product_fields'];
+}
+
+/**
+ * Returns a form array with static fields for a product bundle.
+ *
+ * @see http://www.alexweber.com.br/en/articles/how-manually-add-entity-field-forms-custom-drupal-form#.VAsnhsKRlaY.mailto
+ *
+ * @param $form
+ * @param $form_state
+ * @param $commerce_product_bundle
+ *
+ * @return array
+ *   Form items for static fields.
+ * @throws EntityMetadataWrapperException
+ */
+function _commerce_product_sync_get_static_fields_form($form, $form_state, $bundle_name) {
+  $return = array();
+
+  // Values to work with.
+  $static_fields = _commerce_product_sync_get_static_fields($bundle_name);
+
+  // Defaults to pass to field_default_form.
+  $entity_type = 'commerce_product';
+  $entity = entity_metadata_wrapper('commerce_product')->value();
+  $langcode = $form['language']['#value'];
+  $items = array();
+
+  // Loop static field and add their corresponding field to the return array.
+  foreach ($static_fields as $field_name) {
+    // We need the field and field instance information to pass along to field_default_form().
+    $field = field_info_field($field_name);
+    $instance = field_info_instance($entity_type, $field_name, $bundle_name);
+
+    // This is where the cool stuff happens.
+    $field_form = field_default_form($entity_type, $entity, $field, $instance, $langcode, $items, $form, $form_state);
+
+    // Boom! Now $field_form contains an array with the fully-built FAPI array for the address field!
+
+    // Adding it to your form is pretty simple:
+    $return[] = $field_form;
+  }
+
+  return $return;
+}
