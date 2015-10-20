@@ -220,8 +220,19 @@ function _commerce_product_sync_form_submit($form, &$form_state) {
   foreach ($variants as $new_product_attributes) {
     // Create products.
     try {
-      // Get wrapper.
+
+      // Build up SKU.
+      // Set store hardcoded.
+      if ($store_id) {
+        $sku['store'] = $store_id;
+      }
+
+      // Get product-wrapper.
       $product_wrapper = entity_metadata_wrapper('commerce_product', commerce_product_new($commerce_product_bundle));
+
+      // Add to SKU.
+      $sku[$product_display_wrapper->getBundle()] = $product_display_wrapper->getIdentifier();
+
 
       // Set meta/property info on product.
       $product_wrapper->creator = $store_entity->creator->getIdentifier();
@@ -237,17 +248,18 @@ function _commerce_product_sync_form_submit($form, &$form_state) {
       }
 
       // Set attribute fields.
-      foreach ($new_product_attributes as $k => $v) {
-        $product_wrapper->$k = $v;
+      foreach ($new_product_attributes as $attr_field => $attr_value) {
+        $product_wrapper->$attr_field = $attr_value;
+        $sku[$attr_field] = $attr_value;
       }
 
       // Set active/published status.
       $product_wrapper->status = FALSE;
 
       // Set Title by pattern.
-      $product_wrapper->sku = (string) microtime(TRUE);
+      $product_wrapper->sku = str_replace('field_', '', array_to_machine_name($sku));
       // Set SKU by pattern.
-      $product_wrapper->title = (string) microtime(TRUE);
+      $product_wrapper->title = str_replace('field_', '', array_to_machine_name($sku));
 
       // Set title.
       // $product_wrapper->title = "No variation in the title...";

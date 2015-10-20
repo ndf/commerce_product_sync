@@ -104,3 +104,34 @@ function _commerce_product_sync_get_static_fields($commerce_product_bundle) {
 
   return $static_fields;
 }
+
+/**
+ * Returns array as key_value string.
+ */
+if (!function_exists('array_to_machine_name')) {
+
+  /**
+   * Returns array as key_value string.
+   *
+   * @param array $array
+   *   Like: array(a=>1, b=>2]).
+   *
+   * @return string
+   *   becomes 'a1_a2';
+   */
+  function array_to_machine_name($array = array()) {
+    $string = '';
+
+    $count = 0;
+    foreach ($array as $k => $v) {
+      if ($count > 0) {
+        $string .= "__";
+      }
+      $count++;
+
+      $string .= (string) $k . (string) $v;
+    }
+
+    return (string) $string;
+  }
+}
