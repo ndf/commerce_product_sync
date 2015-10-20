@@ -242,6 +242,11 @@ function _commerce_product_sync_form_submit($form, &$form_state) {
       // Set active/published status.
       $product_wrapper->status = FALSE;
 
+      // Set Title by pattern.
+      $product_wrapper->sku = (string) microtime(TRUE);
+      // Set SKU by pattern.
+      $product_wrapper->title = (string) microtime(TRUE);
+
       // Set title.
       // $product_wrapper->title = "No variation in the title...";
       // Set store-owner as author of the display.
