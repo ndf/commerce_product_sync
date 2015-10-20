@@ -64,9 +64,11 @@ function commerce_product_sync_form_field_ui_field_edit_form_alter(&$form, &$for
 }
 
 /**
- * Implements hook_form_alter().
+ * Implements hook_form_BASE_FORM_ID_alter().
+ *
+ * BASE_FORM_ID = node_form.
  */
-function commerce_product_sync_form_alter(&$form, &$form_state, $form_id) {
+function commerce_product_sync_form_node_form_alter(&$form, &$form_state, $form_id) {
 
   // Validate: only on entity create forms.
   if (!isset($form['#entity']) || !isset($form['#bundle'])) {
