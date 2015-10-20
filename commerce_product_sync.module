@@ -46,12 +46,11 @@ function commerce_product_sync_form_field_ui_field_edit_form_alter(&$form, &$for
     '#type' => 'fieldset',
     '#title' => 'Product sync settings',
     '#description' => '',
-    '#default_value' => $form['#instance']['product_sync'],
   );
   $form['instance']['product_sync']['bulk_create'] = array(
     '#type' => 'checkbox',
     '#title' => 'Bulk create products when creating a new product',
-    '#default_value' => $form['#instance']['product_sync']['bulk_create'],
+    '#default_value' => isset($form['#instance']['product_sync']['bulk_create']) ? $form['#instance']['product_sync']['bulk_create'] : 0,
     '#description' => 'If you use Inline Entity Form, it is recommended to disable "Allow users to add new products" and "Allow user to add existing products".
     When enabled, the product_reference widget is replaced on creation.',
   );
@@ -59,11 +58,10 @@ function commerce_product_sync_form_field_ui_field_edit_form_alter(&$form, &$for
     '#type' => 'checkbox',
     '#title' => 'Add or remove products when attributes are changed',
     '#disabled' => TRUE,
-    '#default_value' => $form['#instance']['product_sync']['keep_in_sync'],
+    '#default_value' => isset($form['#instance']['product_sync']['keep_in_sync']) ? $form['#instance']['product_sync']['keep_in_sync'] : 0,
     '#description' => 'This feature has not been implemented yet. It is here for reference.',
   );
 }
-
 
 /**
  * Implements hook_form_alter().
@@ -93,8 +91,8 @@ function commerce_product_sync_form_alter(&$form, &$form_state, $form_id) {
   }
 
   // Validate: bulk creation must be enabled.
-  $commerce_product_reference_field_instance = field_info_instance($form['#entity_type'], reset($bundle_commerce_product_reference_fields), $form['#bundle']);
-  if (!$commerce_product_reference_field_instance['product_sync']['bulk_create']) {
+  $product_reference_field = field_info_instance($form['#entity_type'], reset($bundle_commerce_product_reference_fields), $form['#bundle']);
+  if (!isset($product_reference_field['product_sync']) || !$product_reference_field['product_sync']['bulk_create']) {
     return;
   }
 
@@ -105,10 +103,10 @@ function commerce_product_sync_form_alter(&$form, &$form_state, $form_id) {
   ctools_include('helpers', 'commerce_product_sync');
 
   // Build: First remove the original field.
-  unset($form[$commerce_product_reference_field_instance['field_name']]);
+  unset($form[$product_reference_field['field_name']]);
 
   // Get referenceable product type.
-  $referenceable_product_types = _commerce_product_sync_filter_referenceable_types($commerce_product_reference_field_instance['settings']['referenceable_types']);
+  $referenceable_product_types = _commerce_product_sync_filter_referenceable_types($product_reference_field['settings']['referenceable_types']);
 
   // Get selected product_type
   if (isset($form_state['values']['product_type'])) {
@@ -126,7 +124,7 @@ function commerce_product_sync_form_alter(&$form, &$form_state, $form_id) {
   );
   $form['commerce_product_sync']['commerce_product_reference'] = array(
     '#type' => 'hidden',
-    '#value' => $commerce_product_reference_field_instance['field_name'],
+    '#value' => $product_reference_field['field_name'],
   );
   $form['commerce_product_sync']['product_type'] = array(
     '#type' => 'radios',
